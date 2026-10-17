@@ -61,7 +61,7 @@ void phantomdrive_clear_unlock_pending(void) {
 }
 
 bool phantomdrive_get_unlock_pending(void) {
-	return phantomdrive_unlock_pending;
+	return phantomdrive_unlock_pending && !pw_partial && pending_pw_len != 0;
 }
 
 bool phantomdrive_is_locked(void) {
@@ -70,6 +70,7 @@ bool phantomdrive_is_locked(void) {
 
 void phantomdrive_unlock(void)
 {
+	USB20_Device_Init(DISABLE);
 	// We make a custom salt per-device
 	phantomdrive_crypto_unlock(pending_pw, pending_pw_len, salt_bytes);
 	memset(pending_pw, 0, sizeof(pending_pw));
@@ -83,7 +84,6 @@ void phantomdrive_unlock(void)
 	g_bot.transfer_flags = 0;
 	g_bot.read_pending = false;
 	g_bot.write_pending = false;
-	USB20_Device_Init(DISABLE);
 	PFIC_EnableIRQ(USBHS_IRQn);
 	USB20_Device_Init(ENABLE);
 
