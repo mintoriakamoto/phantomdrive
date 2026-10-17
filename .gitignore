@@ -9,3 +9,4 @@ media/
 *.lck
 kdf
 unencrypted.blob
+*.bin
