@@ -13,7 +13,6 @@
 
 typedef struct {
     uint64_t usb_cycles;
-    uint64_t snoop_cycles;
     uint64_t crypt_cycles;
     uint64_t sd_cycles;
     uint64_t dat0_cycles;
@@ -54,12 +53,11 @@ void write_profile_log(void)
 {
     uint32_t total_cycles = write_profile_elapsed(write_prof.total_start);
 
-    cprintf("Wprof u2 sec=%u ch=%lu total=%luus usb=%luus snoop=%luus crypt=%luus sd=%luus dat0=%luus\r\n",
+    cprintf("Wprof u2 sec=%u ch=%lu total=%luus usb=%luus crypt=%luus sd=%luus dat0=%luus\r\n",
             write_prof.sectors,
             (unsigned long)write_prof.chunks,
             (unsigned long)write_profile_us(total_cycles),
             (unsigned long)write_profile_us(write_prof.usb_cycles),
-            (unsigned long)write_profile_us(write_prof.snoop_cycles),
             (unsigned long)write_profile_us(write_prof.crypt_cycles),
             (unsigned long)write_profile_us(write_prof.sd_cycles),
             (unsigned long)write_profile_us(write_prof.dat0_cycles));
@@ -98,11 +96,6 @@ void write_profile_count_chunk(void)
 void write_profile_add_usb(uint32_t start)
 {
     write_prof.usb_cycles += write_profile_elapsed(start);
-}
-
-void write_profile_add_snoop(uint32_t start)
-{
-    write_prof.snoop_cycles += write_profile_elapsed(start);
 }
 
 void write_profile_add_crypt(uint32_t start)

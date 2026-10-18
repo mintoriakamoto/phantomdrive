@@ -12,6 +12,7 @@
 #include "msc_read.h"
 #include "msc_write.h"
 #include "phantomdrive.h"
+#include "unlock_file.h"
 #include "CH56x_usb20_devbulk.h"
 #include <string.h>
 
@@ -419,23 +420,8 @@ void bot_send_csw(void)
     R8_UEP1_TX_CTRL = (R8_UEP1_TX_CTRL & ~RB_UEP_TRES_MASK) | UEP_T_RES_ACK;
 }
 
-static bool bot_can_unlock(uint64_t *last_write_ms)
+static bool bot_usb_is_idle(void)
 {
-    if(*last_write_ms == 0)
-        *last_write_ms = bsp_get_tick() / bsp_get_nbtick_1ms();
-
-    // Figure out how long since the last write
-    uint64_t idle_ms = (bsp_get_tick() / bsp_get_nbtick_1ms())
-            - *last_write_ms;
-
-    if (idle_ms >= (UNLOCK_IDLE_MS + 500))
-        // Force the switch after another 500 ms, even if USB is still busy.
-        return true;
-
-    if (idle_ms < UNLOCK_IDLE_MS)
-        // Minimum of UNLOCK_IDLE_MS
-        return false;
-
     // Finish any active command or queued disk I/O before switching volumes.
     if (g_bot.transfer_flags || g_bot.read_pending || g_bot.write_pending)
         return false;
@@ -448,13 +434,38 @@ static bool bot_can_unlock(uint64_t *last_write_ms)
     if (R8_USB_INT_FG & (RB_USB_IF_TRANSFER | RB_USB_IF_SETUOACT | RB_USB_IF_BUSRST))
         return false;
 
-    // If greater than UNLOCK_IDLE_MS has passed, and USB isn't busy
     return true;
+}
+
+static void bot_check_unlock_file(void)
+{
+    static uint8_t password[UNLOCK_PASSWORD_MAX];
+    size_t password_len;
+
+    /* SD access is serialized in this loop; USB interrupts only queue disk work. */
+    bool found = unlock_file_read(password, &password_len);
+    if (!found)
+        return;
+
+    PFIC_DisableIRQ(USBHS_IRQn);
+    /* Stop new commands without disturbing a queued outgoing response. */
+    uint8_t rx_control = R8_UEP1_RX_CTRL;
+    R8_UEP1_RX_CTRL = (rx_control & ~RB_UEP_RRES_MASK) | UEP_R_RES_NAK;
+
+    if (bot_usb_is_idle()) {
+        phantomdrive_unlock(password, password_len);
+    } else {
+        R8_UEP1_RX_CTRL = rx_control;
+        PFIC_EnableIRQ(USBHS_IRQn);
+    }
+
+    memset(password, 0, sizeof(password));
 }
 
 void bot_poll(void)
 {
     static uint64_t last_write_ms;
+    static uint64_t last_check_ms;
     if (g_bot.read_pending) {
         // Host wants to read sectors from SD
         g_bot.read_pending = false;
@@ -470,8 +481,12 @@ void bot_poll(void)
         R8_UEP1_RX_CTRL = (R8_UEP1_RX_CTRL & ~RB_UEP_RRES_MASK) | UEP_R_RES_ACK;
     }
 
-    if (phantomdrive_get_unlock_pending() && bot_can_unlock(&last_write_ms)) {
-        // Unlcok the drive
-        phantomdrive_unlock();
+    if (phantomdrive_is_locked()) {
+        uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
+        if (now - last_write_ms >= UNLOCK_IDLE_MS &&
+            now - last_check_ms >= UNLOCK_IDLE_MS) {
+            last_check_ms = now;
+            bot_check_unlock_file();
+        }
     }
 }

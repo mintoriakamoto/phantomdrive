@@ -12,9 +12,7 @@
 #endif
 
 void phantomdrive_init(uint64_t unique_id);
-void phantomdrive_snoop_write(uint8_t *buf, uint32_t len);
-bool phantomdrive_get_unlock_pending(void);
-void phantomdrive_unlock(void);
+void phantomdrive_unlock(const uint8_t *password, size_t password_len);
 bool phantomdrive_is_locked(void);
 void phantomdrive_encrypt_buf(uint8_t *buf, uint32_t sd_lba, uint16_t num_sectors);
 void phantomdrive_decrypt_buf(uint8_t *buf, uint32_t sd_lba, uint16_t num_sectors);
