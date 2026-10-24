@@ -4,10 +4,10 @@
 #include "diskio.h"
 #include <string.h>
 
-#define UNLOCK_PATH "/unlock.txt"
 #define UNLOCK_FILE_MAX_SIZE 256
 
 static FATFS filesystem;
+static char unlock_path[14]; /* Root path plus an 8.3 filename. */
 
 /* A normal memset can be optimized away; volatile keeps password wipes intact. */
 static void clear_bytes(void *buffer, size_t size)
@@ -61,50 +61,47 @@ done:
     return ready;
 }
 
-static bool read_password(const uint8_t *contents, size_t size,
-                          uint8_t *password, size_t *password_len)
+static bool matches_password(const uint8_t *contents, size_t size,
+                             size_t password_offset, size_t *password_len)
 {
     const char prefix[] = "password:";
     const size_t prefix_len = sizeof(prefix) - 1;
 
-    for (size_t offset = 0; offset + prefix_len < size; offset++) {
-        if (memcmp(contents + offset, prefix, prefix_len) != 0)
-            continue;
+    if (password_offset < prefix_len || password_offset >= size)
+        return false;
+    if (memcmp(contents + password_offset - prefix_len, prefix, prefix_len) != 0)
+        return false;
 
-        size_t start = offset + prefix_len;
-        size_t end = start;
+    size_t length = *password_len;
+    if (length > size - password_offset)
+        length = size - password_offset;
+    if (length == 0 || length > UNLOCK_PASSWORD_MAX)
+        return false;
 
-        while (end < size && contents[end] != '\r' &&
-               contents[end] != '\n' && contents[end] != '\0')
-            end++;
-
-        size_t length = end - start;
-        if (length == 0 || length > UNLOCK_PASSWORD_MAX)
+    for (size_t offset = 0; offset < length; offset++) {
+        if (contents[password_offset + offset] != 0)
             return false;
-
-        memcpy(password, contents + start, length);
-        *password_len = length;
-        return true;
     }
 
-    return false;
+    size_t end = password_offset + length;
+    if (end < size && contents[end] != '\r' && contents[end] != '\n' &&
+        contents[end] != '\0')
+        return false;
+
+    *password_len = length;
+    return true;
 }
 
-bool unlock_file_read(uint8_t *password, size_t *password_len)
+static bool file_matches(const char *path, uint32_t lba,
+                         size_t password_offset, size_t *password_len)
 {
     FIL file;
     uint8_t contents[UNLOCK_FILE_MAX_SIZE];
     UINT bytes_read;
+    size_t length = *password_len;
     bool found = false;
 
-    clear_bytes(password, UNLOCK_PASSWORD_MAX);
-    *password_len = 0;
-
-    /* A fresh mount sees directory and FAT updates from the latest host writes. */
-    if (!mount_filesystem())
-        goto done;
-
-    if (f_open(&file, UNLOCK_PATH, FA_READ) != FR_OK)
+    if (f_open(&file, path, FA_READ) != FR_OK)
         goto done;
 
     FSIZE_t size = f_size(&file);
@@ -119,19 +116,56 @@ bool unlock_file_read(uint8_t *password, size_t *password_len)
     if (bytes_read != size)
         goto close_file;
 
-    found = read_password(contents, bytes_read, password, password_len);
+    if (file.sect == lba)
+        found = matches_password(contents, bytes_read, password_offset, &length);
 
 close_file:
     if (f_close(&file) != FR_OK)
         found = false;
 
 done:
-    unmount_filesystem();
     clear_bytes(contents, sizeof(contents));
-    if (!found) {
-        clear_bytes(password, UNLOCK_PASSWORD_MAX);
-        *password_len = 0;
+    if (found)
+        *password_len = length;
+    return found;
+}
+
+bool unlock_file_matches(uint32_t lba, size_t password_offset, size_t *password_len)
+{
+    DIR directory;
+    FILINFO info;
+    bool found = false;
+
+    unlock_path[0] = '\0';
+    /* A fresh mount sees directory and FAT updates from the latest host writes. */
+    if (!mount_filesystem())
+        goto done;
+    if (f_opendir(&directory, "/") != FR_OK)
+        goto done;
+
+    while (1) {
+        FRESULT result = f_readdir(&directory, &info);
+        if (result != FR_OK || info.fname[0] == '\0')
+            break;
+        if (info.fattrib & AM_DIR)
+            continue;
+        if (info.fsize == 0 || info.fsize > UNLOCK_FILE_MAX_SIZE)
+            continue;
+
+        unlock_path[0] = '/';
+        strcpy(unlock_path + 1, info.fname);
+        found = file_matches(unlock_path, lba, password_offset, password_len);
+        if (found)
+            break;
     }
+
+    if (f_closedir(&directory) != FR_OK)
+        found = false;
+
+done:
+    unmount_filesystem();
+    if (!found)
+        unlock_path[0] = '\0';
     return found;
 }
 
@@ -142,10 +176,12 @@ bool unlock_file_delete(void)
     UINT bytes_written;
     bool deleted = false;
 
+    if (unlock_path[0] == '\0')
+        return false;
     if (!mount_filesystem())
         goto done;
 
-    if (f_open(&file, UNLOCK_PATH, FA_WRITE) != FR_OK)
+    if (f_open(&file, unlock_path, FA_WRITE) != FR_OK)
         goto done;
 
     FSIZE_t size = f_size(&file);
@@ -158,9 +194,11 @@ bool unlock_file_delete(void)
         erased = false;
 
     if (erased)
-        deleted = f_unlink(UNLOCK_PATH) == FR_OK;
+        deleted = f_unlink(unlock_path) == FR_OK;
 
 done:
     unmount_filesystem();
+    if (deleted)
+        unlock_path[0] = '\0';
     return deleted;
 }

@@ -82,9 +82,17 @@ static void receive_chunk_usb2(uint8_t *buf, uint16_t chunk_sectors,
 static uint8_t write_received_chunk(uint8_t *buf, uint32_t lba, uint16_t chunk_sectors)
 {
     uint32_t physical_lba = compute_physical_lba(lba);
+    uint32_t prof_start = write_profile_now();
+
     write_profile_count_chunk();
+
+    if(phantomdrive_is_locked()) {
+        phantomdrive_snoop_write(buf, (uint32_t)chunk_sectors * SECTOR_SIZE, lba);
+    }
+
+    write_profile_add_snoop(prof_start);
     if (!phantomdrive_is_locked()) {
-        uint32_t prof_start = write_profile_now();
+        prof_start = write_profile_now();
         phantomdrive_encrypt_buf(buf, physical_lba, chunk_sectors);
         write_profile_add_crypt(prof_start);
     }

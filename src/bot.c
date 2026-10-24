@@ -12,7 +12,6 @@
 #include "msc_read.h"
 #include "msc_write.h"
 #include "phantomdrive.h"
-#include "unlock_file.h"
 #include "CH56x_usb20_devbulk.h"
 #include <string.h>
 
@@ -439,27 +438,18 @@ static bool bot_usb_is_idle(void)
 
 static void bot_check_unlock_file(void)
 {
-    static uint8_t password[UNLOCK_PASSWORD_MAX];
-    size_t password_len;
-
-    /* SD access is serialized in this loop; USB interrupts only queue disk work. */
-    bool found = unlock_file_read(password, &password_len);
-    if (!found)
-        return;
-
     PFIC_DisableIRQ(USBHS_IRQn);
+
     /* Stop new commands without disturbing a queued outgoing response. */
     uint8_t rx_control = R8_UEP1_RX_CTRL;
     R8_UEP1_RX_CTRL = (rx_control & ~RB_UEP_RRES_MASK) | UEP_R_RES_NAK;
 
     if (bot_usb_is_idle()) {
-        phantomdrive_unlock(password, password_len);
+        phantomdrive_unlock();
     } else {
         R8_UEP1_RX_CTRL = rx_control;
         PFIC_EnableIRQ(USBHS_IRQn);
     }
-
-    memset(password, 0, sizeof(password));
 }
 
 void bot_poll(void)
@@ -482,11 +472,15 @@ void bot_poll(void)
     }
 
     if (phantomdrive_is_locked()) {
+        phantomdrive_check_unlock_timeout();
         uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
+
+        // Give some time between last check and last write
         if (now - last_write_ms >= UNLOCK_IDLE_MS &&
             now - last_check_ms >= UNLOCK_IDLE_MS) {
             last_check_ms = now;
-            bot_check_unlock_file();
+            if(phantomdrive_get_unlock_pending())
+                bot_check_unlock_file();
         }
     }
 }

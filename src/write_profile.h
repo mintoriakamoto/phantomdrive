@@ -13,6 +13,7 @@ void write_profile_reset(uint16_t sectors);
 void write_profile_log(void);
 void write_profile_count_chunk(void);
 void write_profile_add_usb(uint32_t start);
+void write_profile_add_snoop(uint32_t start);
 void write_profile_add_crypt(uint32_t start);
 void write_profile_add_sd(uint32_t start);
 void write_profile_add_dat0(uint32_t start);
@@ -24,6 +25,7 @@ static inline void write_profile_reset(uint16_t sectors) { (void)sectors; }
 static inline void write_profile_log(void) {}
 static inline void write_profile_count_chunk(void) {}
 static inline void write_profile_add_usb(uint32_t start) { (void)start; }
+static inline void write_profile_add_snoop(uint32_t start) { (void)start; }
 static inline void write_profile_add_crypt(uint32_t start) { (void)start; }
 static inline void write_profile_add_sd(uint32_t start) { (void)start; }
 static inline void write_profile_add_dat0(uint32_t start) { (void)start; }

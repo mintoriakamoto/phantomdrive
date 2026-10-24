@@ -11,7 +11,7 @@
 bool unlock_file_init(void);
 
 /* Serialize SD access; disconnect USB before deleting. */
-bool unlock_file_read(uint8_t *password, size_t *password_len);
+bool unlock_file_matches(uint32_t lba, size_t password_offset, size_t *password_len);
 bool unlock_file_delete(void);
 
 #endif /* UNLOCK_FILE_H_ */
