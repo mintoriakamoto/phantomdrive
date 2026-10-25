@@ -455,24 +455,18 @@ void bot_poll(void)
         R8_UEP1_RX_CTRL = (R8_UEP1_RX_CTRL & ~RB_UEP_RRES_MASK) | UEP_R_RES_ACK;
     }
 
-    if (!phantomdrive_is_locked())
-        // Skip unlock logic if we're already unlocked
-        return;
-
     if (!phantomdrive_get_unlock_pending())
         // If we're not currently trying to unlock, skip
         return;
 
-    if (phantomdrive_cancel_expired_unlock())
-        // If we're trying to cancel an unlock, skip
-        return;
-
     // Ensure there is some time between last check and last write
     uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
-    if (now - last_write_ms < UNLOCK_IDLE_MS)
-        return;
-    if (now - last_check_ms < UNLOCK_IDLE_MS)
-        return;
+    if (!phantomdrive_unlock_timeout_reached()) {
+        if (now - last_write_ms < UNLOCK_IDLE_MS)
+            return;
+        if (now - last_check_ms < UNLOCK_IDLE_MS)
+            return;
+    }
 
     last_check_ms = now;
 

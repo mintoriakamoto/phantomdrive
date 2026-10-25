@@ -12,8 +12,6 @@
 
 static volatile uint8_t phantomdrive_state = STATE_LOCKED;
 
-static bool phantomdrive_unlock_pending = false;
-
 static uint8_t pending_pw[UNLOCK_PASSWORD_MAX];
 static size_t pending_pw_len;
 static uint32_t pending_pw_lba;
@@ -60,30 +58,21 @@ void phantomdrive_init(uint64_t unique_id)
 }
 
 void phantomdrive_set_unlock_pending(void) {
-	phantomdrive_unlock_pending = true;
+	phantomdrive_state = STATE_UNLOCK_PENDING;
 }
 
-void phantomdrive_clear_unlock_pending(void) {
-	phantomdrive_unlock_pending = false;
-	clear_pending_password();
-}
-
-bool phantomdrive_cancel_expired_unlock(void)
+bool phantomdrive_unlock_timeout_reached(void)
 {
 	uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
-	if (now - pending_pw_started_ms < UNLOCK_TIMEOUT_MS)
-		return false;
-
-	phantomdrive_clear_unlock_pending();
-	return true;
+	return now - pending_pw_started_ms >= UNLOCK_TIMEOUT_MS;
 }
 
 bool phantomdrive_get_unlock_pending(void) {
-	return phantomdrive_unlock_pending;
+	return phantomdrive_state == STATE_UNLOCK_PENDING;
 }
 
 bool phantomdrive_is_locked(void) {
-	return phantomdrive_state == STATE_LOCKED;
+	return phantomdrive_state != STATE_UNLOCKED;
 }
 
 void phantomdrive_try_unlock(void)
@@ -97,16 +86,15 @@ void phantomdrive_try_unlock(void)
 	if (!bot_usb_is_idle())
 		goto resume_usb;
 
-	/* Start with fresh filesystem caches after the host's writes. */
-	if (!unlock_file_mount())
-		goto unmount;
-
 	size_t password_len = pending_pw_len;
-	const char *path = unlock_file_find(pending_pw_lba, pending_pw_offset,
-	                                   &password_len);
-	if (phantomdrive_cancel_expired_unlock())
-		goto unmount;
-	if (path == NULL)
+	const char *path = NULL;
+
+	/* Find the file the user entered the password in*/
+	if (unlock_file_mount())
+		path = unlock_file_find(pending_pw_lba, pending_pw_offset, &password_len);
+
+	bool timed_out = phantomdrive_unlock_timeout_reached();
+	if (path == NULL && !timed_out)
 		goto unmount;
 
 	/* A USB reset or setup request can arrive during the disk reads. */
@@ -114,17 +102,24 @@ void phantomdrive_try_unlock(void)
 		goto unmount;
 
 	USB20_Device_Init(DISABLE);
-	bool deleted = unlock_file_delete(path);
+	bool deleted = false;
+	if (path != NULL) {
+		pending_pw_len = password_len;
+		deleted = unlock_file_delete(path);
+	}
 	unlock_file_unmount();
-	if (!deleted) {
+	if (!deleted && !timed_out) {
 		PFIC_EnableIRQ(USBHS_IRQn);
 		USB20_Device_Init(ENABLE);
 		return;
 	}
 
+	if (password_len > sizeof(pending_pw))
+		password_len = sizeof(pending_pw);
+
 	// We make a custom salt per-device
 	phantomdrive_crypto_unlock(pending_pw, password_len, salt_bytes);
-	phantomdrive_clear_unlock_pending();
+	clear_pending_password();
 
 	g_bot.capacity = TF_EMMCParam.EMMCSecNum - LOCKED_SECTORS;
 	phantomdrive_state = STATE_UNLOCKED;
