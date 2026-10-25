@@ -8,7 +8,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define UNLOCK_TIMEOUT_MS 30000
+#define UNLOCK_TIMEOUT_MS 3000
 
 static volatile uint8_t phantomdrive_state = STATE_LOCKED;
 
