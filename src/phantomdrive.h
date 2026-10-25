@@ -14,8 +14,8 @@
 void phantomdrive_init(uint64_t unique_id);
 void phantomdrive_snoop_write(uint8_t *buf, uint32_t len, uint32_t lba);
 bool phantomdrive_get_unlock_pending(void);
-void phantomdrive_check_unlock_timeout(void);
-void phantomdrive_unlock(void);
+bool phantomdrive_cancel_expired_unlock(void);
+void phantomdrive_try_unlock(void);
 bool phantomdrive_is_locked(void);
 void phantomdrive_encrypt_buf(uint8_t *buf, uint32_t sd_lba, uint16_t num_sectors);
 void phantomdrive_decrypt_buf(uint8_t *buf, uint32_t sd_lba, uint16_t num_sectors);

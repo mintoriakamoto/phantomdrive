@@ -24,6 +24,11 @@ void unlock_file_diskio_set_formatting(bool enabled)
     formatting = enabled;
 }
 
+void unlock_file_diskio_reset_timeout(void)
+{
+    io_started_ticks = bsp_get_tick();
+}
+
 static bool io_failed(void)
 {
     uint64_t now = bsp_get_tick();

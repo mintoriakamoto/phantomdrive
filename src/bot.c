@@ -419,7 +419,7 @@ void bot_send_csw(void)
     R8_UEP1_TX_CTRL = (R8_UEP1_TX_CTRL & ~RB_UEP_TRES_MASK) | UEP_T_RES_ACK;
 }
 
-static bool bot_usb_is_idle(void)
+bool bot_usb_is_idle(void)
 {
     // Finish any active command or queued disk I/O before switching volumes.
     if (g_bot.transfer_flags || g_bot.read_pending || g_bot.write_pending)
@@ -434,22 +434,6 @@ static bool bot_usb_is_idle(void)
         return false;
 
     return true;
-}
-
-static void bot_check_unlock_file(void)
-{
-    PFIC_DisableIRQ(USBHS_IRQn);
-
-    /* Stop new commands without disturbing a queued outgoing response. */
-    uint8_t rx_control = R8_UEP1_RX_CTRL;
-    R8_UEP1_RX_CTRL = (rx_control & ~RB_UEP_RRES_MASK) | UEP_R_RES_NAK;
-
-    if (bot_usb_is_idle()) {
-        phantomdrive_unlock();
-    } else {
-        R8_UEP1_RX_CTRL = rx_control;
-        PFIC_EnableIRQ(USBHS_IRQn);
-    }
 }
 
 void bot_poll(void)
@@ -471,16 +455,19 @@ void bot_poll(void)
         R8_UEP1_RX_CTRL = (R8_UEP1_RX_CTRL & ~RB_UEP_RRES_MASK) | UEP_R_RES_ACK;
     }
 
-    if (phantomdrive_is_locked()) {
-        phantomdrive_check_unlock_timeout();
-        uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
+    if (!phantomdrive_is_locked())
+        return;
+    if (!phantomdrive_get_unlock_pending())
+        return;
+    if (phantomdrive_cancel_expired_unlock())
+        return;
 
-        // Give some time between last check and last write
-        if (now - last_write_ms >= UNLOCK_IDLE_MS &&
-            now - last_check_ms >= UNLOCK_IDLE_MS) {
-            last_check_ms = now;
-            if(phantomdrive_get_unlock_pending())
-                bot_check_unlock_file();
-        }
-    }
+    uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
+    if (now - last_write_ms < UNLOCK_IDLE_MS)
+        return;
+    if (now - last_check_ms < UNLOCK_IDLE_MS)
+        return;
+
+    last_check_ms = now;
+    phantomdrive_try_unlock();
 }

@@ -17,6 +17,7 @@ void bot_handle_bulk_in(void);
 void bot_handle_bulk_out(uint8_t *pbuf, uint16_t packlen);
 void bot_send_response_data(void);
 void bot_send_csw(void);
+bool bot_usb_is_idle(void);
 void bot_poll(void);
 
 #endif /* BOT_H_ */

@@ -7,7 +7,6 @@
 #define UNLOCK_FILE_MAX_SIZE 256
 
 static FATFS filesystem;
-static char unlock_path[FF_LFN_BUF + 2]; /* Root slash, UTF-8 filename and NUL. */
 
 /* A normal memset can be optimized away; volatile keeps password wipes intact. */
 static void clear_bytes(void *buffer, size_t size)
@@ -18,13 +17,13 @@ static void clear_bytes(void *buffer, size_t size)
         *byte++ = 0;
 }
 
-static void unmount_filesystem(void)
+void unlock_file_unmount(void)
 {
     f_mount(NULL, "", 0);
     clear_bytes(&filesystem, sizeof(filesystem));
 }
 
-static bool mount_filesystem(void)
+bool unlock_file_mount(void)
 {
     if (f_mount(&filesystem, "", 1) != FR_OK)
         return false;
@@ -56,13 +55,13 @@ bool unlock_file_init(void)
     ready = result == FR_OK && filesystem.fs_type == FS_FAT32;
 
 done:
-    unmount_filesystem();
+    unlock_file_unmount();
     clear_bytes(work, sizeof(work));
     return ready;
 }
 
-static bool matches_password(const uint8_t *contents, size_t size,
-                             size_t password_offset, size_t *password_len)
+static bool matches_scrubbed_password(const uint8_t *contents, size_t size,
+                                     size_t password_offset, size_t *password_len)
 {
     const char prefix[] = "password:";
     const size_t prefix_len = sizeof(prefix) - 1;
@@ -92,8 +91,9 @@ static bool matches_password(const uint8_t *contents, size_t size,
     return true;
 }
 
-static bool file_matches(const char *path, uint32_t lba,
-                         size_t password_offset, size_t *password_len)
+static bool file_contains_scrubbed_password(const char *path, uint32_t lba,
+                                          size_t password_offset,
+                                          size_t *password_len)
 {
     FIL file;
     uint8_t contents[UNLOCK_FILE_MAX_SIZE];
@@ -117,7 +117,8 @@ static bool file_matches(const char *path, uint32_t lba,
         goto close_file;
 
     if (file.sect == lba)
-        found = matches_password(contents, bytes_read, password_offset, &length);
+        found = matches_scrubbed_password(contents, bytes_read,
+                                         password_offset, &length);
 
 close_file:
     if (f_close(&file) != FR_OK)
@@ -130,18 +131,16 @@ done:
     return found;
 }
 
-bool unlock_file_matches(uint32_t lba, size_t password_offset, size_t *password_len)
+/* Find the file where password:xxxxxx was entered. When this is called password is already scrubbed*/
+const char *unlock_file_find(uint32_t lba, size_t password_offset, size_t *password_len)
 {
+    static char path[FF_LFN_BUF + 2]; /* Root slash, UTF-8 filename and NUL. */
     DIR directory;
     FILINFO info;
-    bool found = false;
+    const char *found_path = NULL;
 
-    unlock_path[0] = '\0';
-    /* A fresh mount sees directory and FAT updates from the latest host writes. */
-    if (!mount_filesystem())
-        goto done;
     if (f_opendir(&directory, "/") != FR_OK)
-        goto done;
+        return NULL;
 
     while (1) {
         FRESULT result = f_readdir(&directory, &info);
@@ -152,53 +151,45 @@ bool unlock_file_matches(uint32_t lba, size_t password_offset, size_t *password_
         if (info.fsize == 0 || info.fsize > UNLOCK_FILE_MAX_SIZE)
             continue;
 
-        unlock_path[0] = '/';
-        strcpy(unlock_path + 1, info.fname);
-        found = file_matches(unlock_path, lba, password_offset, password_len);
-        if (found)
+        path[0] = '/';
+        strcpy(path + 1, info.fname);
+        if (file_contains_scrubbed_password(path, lba, password_offset,
+                                           password_len)) {
+            found_path = path;
             break;
+        }
     }
 
     if (f_closedir(&directory) != FR_OK)
-        found = false;
-
-done:
-    unmount_filesystem();
-    if (!found)
-        unlock_path[0] = '\0';
-    return found;
+        return NULL;
+    return found_path;
 }
 
-bool unlock_file_delete(void)
+bool unlock_file_delete(const char *path)
 {
     FIL file;
     uint8_t blank[UNLOCK_FILE_MAX_SIZE] = {0};
     UINT bytes_written;
-    bool deleted = false;
 
-    if (unlock_path[0] == '\0')
+    unlock_file_diskio_reset_timeout();
+    if (f_open(&file, path, FA_WRITE) != FR_OK)
         return false;
-    if (!mount_filesystem())
-        goto done;
-
-    if (f_open(&file, unlock_path, FA_WRITE) != FR_OK)
-        goto done;
 
     FSIZE_t size = f_size(&file);
-    bool erased = size <= sizeof(blank) &&
-                  f_write(&file, blank, (UINT)size, &bytes_written) == FR_OK &&
-                  bytes_written == size;
+    if (size > sizeof(blank)) {
+        f_close(&file);
+        return false;
+    }
 
+    FRESULT write_result = f_write(&file, blank, (UINT)size, &bytes_written);
     /* Close flushes the overwritten data before unlink frees its clusters. */
-    if (f_close(&file) != FR_OK)
-        erased = false;
+    FRESULT close_result = f_close(&file);
+    if (write_result != FR_OK)
+        return false;
+    if (bytes_written != size)
+        return false;
+    if (close_result != FR_OK)
+        return false;
 
-    if (erased)
-        deleted = f_unlink(unlock_path) == FR_OK;
-
-done:
-    unmount_filesystem();
-    if (deleted)
-        unlock_path[0] = '\0';
-    return deleted;
+    return f_unlink(path) == FR_OK;
 }

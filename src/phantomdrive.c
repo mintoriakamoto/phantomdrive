@@ -1,7 +1,7 @@
 #include "phantomdrive.h"
 #include "phantomdrive_crypto.h"
 #include "unlock_file.h"
-#include "bot_state.h"
+#include "bot.h"
 #include "CH56x_ecdc.h"
 #include "debug.h"
 #include "CH56x_usb20_devbulk.h"
@@ -16,7 +16,6 @@ static bool phantomdrive_unlock_pending = false;
 
 static uint8_t pending_pw[UNLOCK_PASSWORD_MAX];
 static size_t pending_pw_len;
-static size_t unlock_pw_len;
 static uint32_t pending_pw_lba;
 static size_t pending_pw_offset;
 static bool pw_partial;
@@ -35,7 +34,6 @@ static void clear_pending_password(void)
 {
 	memset(pending_pw, 0, sizeof(pending_pw));
 	pending_pw_len = 0;
-	unlock_pw_len = 0;
 	pw_partial = false;
 	prefix_match_len = 0;
 }
@@ -70,43 +68,63 @@ void phantomdrive_clear_unlock_pending(void) {
 	clear_pending_password();
 }
 
-void phantomdrive_check_unlock_timeout(void)
+bool phantomdrive_cancel_expired_unlock(void)
 {
 	uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
-	if (now - pending_pw_started_ms >= UNLOCK_TIMEOUT_MS)
-		phantomdrive_clear_unlock_pending();
+	if (now - pending_pw_started_ms < UNLOCK_TIMEOUT_MS)
+		return false;
+
+	phantomdrive_clear_unlock_pending();
+	return true;
 }
 
 bool phantomdrive_get_unlock_pending(void) {
-	if (!phantomdrive_unlock_pending || pending_pw_len == 0)
-		return false;
-
-	unlock_pw_len = pending_pw_len;
-	bool found = unlock_file_matches(pending_pw_lba, pending_pw_offset, &unlock_pw_len);
-	phantomdrive_check_unlock_timeout();
-	return found && phantomdrive_unlock_pending;
+	return phantomdrive_unlock_pending;
 }
 
 bool phantomdrive_is_locked(void) {
 	return phantomdrive_state == STATE_LOCKED;
 }
 
-void phantomdrive_unlock(void)
+void phantomdrive_try_unlock(void)
 {
+	if (pending_pw_len == 0)
+		return;
+
+	PFIC_DisableIRQ(USBHS_IRQn);
+	uint8_t rx_control = R8_UEP1_RX_CTRL;
+	R8_UEP1_RX_CTRL = (rx_control & ~RB_UEP_RRES_MASK) | UEP_R_RES_NAK;
+	if (!bot_usb_is_idle())
+		goto resume_usb;
+
+	/* Start with fresh filesystem caches after the host's writes. */
+	if (!unlock_file_mount())
+		goto unmount;
+
+	size_t password_len = pending_pw_len;
+	const char *path = unlock_file_find(pending_pw_lba, pending_pw_offset,
+	                                   &password_len);
+	if (phantomdrive_cancel_expired_unlock())
+		goto unmount;
+	if (path == NULL)
+		goto unmount;
+
+	/* A USB reset or setup request can arrive during the disk reads. */
+	if (!bot_usb_is_idle())
+		goto unmount;
+
 	USB20_Device_Init(DISABLE);
-	// We now delete the file with the password, the password has also
-	// been zero'd out by phantomdrive_snoop_write()
-	// but we should cleanup the file as well
-	if (!unlock_file_delete()) {
+	bool deleted = unlock_file_delete(path);
+	unlock_file_unmount();
+	if (!deleted) {
 		PFIC_EnableIRQ(USBHS_IRQn);
 		USB20_Device_Init(ENABLE);
 		return;
 	}
 
 	// We make a custom salt per-device
-	phantomdrive_crypto_unlock(pending_pw, unlock_pw_len, salt_bytes);
-	memset(pending_pw, 0, sizeof(pending_pw));
-	pending_pw_len = 0;
+	phantomdrive_crypto_unlock(pending_pw, password_len, salt_bytes);
+	phantomdrive_clear_unlock_pending();
 
 	g_bot.capacity = TF_EMMCParam.EMMCSecNum - LOCKED_SECTORS;
 	phantomdrive_state = STATE_UNLOCKED;
@@ -120,7 +138,13 @@ void phantomdrive_unlock(void)
 	USB20_Device_Init(ENABLE);
 
 	log_printf("phantomdrive: re-enumerated\r\n");
-	phantomdrive_clear_unlock_pending();
+	return;
+
+unmount:
+	unlock_file_unmount();
+resume_usb:
+	R8_UEP1_RX_CTRL = rx_control;
+	PFIC_EnableIRQ(USBHS_IRQn);
 }
 
 static void finish_password_snoop(size_t pw_len)
