@@ -74,7 +74,7 @@ USER_SRCS = $(filter-out $(USER_AES_SRCS),$(wildcard $(USER_DIR)/*.c)) $(AES_SRC
 OBJS     += $(patsubst $(USER_DIR)/%.c,$(BUILD_DIR)/%.o,$(USER_SRCS))
 
 FATFS_DIR = ./third_party/fatfs
-OBJS += $(BUILD_DIR)/fatfs.o
+OBJS += $(BUILD_DIR)/fatfs.o $(BUILD_DIR)/ffunicode.o
 
 # All of the sources participating in the build are defined here
 OBJS += $(BUILD_DIR)/startup_CH56x.o
@@ -131,7 +131,10 @@ $(BUILD_DIR)/%.o: ./src/%.c | $$(@D)/.
 $(BUILD_DIR)/fatfs.o: $(FATFS_DIR)/ff.c | $$(@D)/.
 	$(COMPILER_PREFIX)-gcc $(C_OPTS) -c -o "$@" "$<"
 
-$(BUILD_DIR)/fatfs.o $(BUILD_DIR)/unlock_file.o $(BUILD_DIR)/unlock_file_diskio.o: $(FATFS_DIR)/ff.h $(FATFS_DIR)/ffconf.h
+$(BUILD_DIR)/ffunicode.o: $(FATFS_DIR)/ffunicode.c | $$(@D)/.
+	$(COMPILER_PREFIX)-gcc $(C_OPTS) -c -o "$@" "$<"
+
+$(BUILD_DIR)/fatfs.o $(BUILD_DIR)/ffunicode.o $(BUILD_DIR)/unlock_file.o $(BUILD_DIR)/unlock_file_diskio.o: $(FATFS_DIR)/ff.h $(FATFS_DIR)/ffconf.h
 
 $(BUILD_DIR)/%.o: ./wch-ch56x-bsp/rvmsis/%.c | $$(@D)/.
 	@echo 'Building file: $<'
