@@ -7,7 +7,7 @@
 #define UNLOCK_FILE_MAX_SIZE 256
 
 static FATFS filesystem;
-static char unlock_path[14]; /* Root path plus an 8.3 filename. */
+static char unlock_path[FF_LFN_BUF + 2]; /* Root slash, UTF-8 filename and NUL. */
 
 /* A normal memset can be optimized away; volatile keeps password wipes intact. */
 static void clear_bytes(void *buffer, size_t size)
