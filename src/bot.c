@@ -456,12 +456,18 @@ void bot_poll(void)
     }
 
     if (!phantomdrive_is_locked())
-        return;
-    if (!phantomdrive_get_unlock_pending())
-        return;
-    if (phantomdrive_cancel_expired_unlock())
+        // Skip unlock logic if we're already unlocked
         return;
 
+    if (!phantomdrive_get_unlock_pending())
+        // If we're not currently trying to unlock, skip
+        return;
+
+    if (phantomdrive_cancel_expired_unlock())
+        // If we're trying to cancel an unlock, skip
+        return;
+
+    // Ensure there is some time between last check and last write
     uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
     if (now - last_write_ms < UNLOCK_IDLE_MS)
         return;
@@ -469,5 +475,7 @@ void bot_poll(void)
         return;
 
     last_check_ms = now;
+
+    // Lets unlock
     phantomdrive_try_unlock();
 }
