@@ -72,9 +72,6 @@ void phantomdrive_clear_unlock_pending(void) {
 
 void phantomdrive_check_unlock_timeout(void)
 {
-	if (!phantomdrive_unlock_pending)
-		return;
-
 	uint64_t now = bsp_get_tick() / bsp_get_nbtick_1ms();
 	if (now - pending_pw_started_ms >= UNLOCK_TIMEOUT_MS)
 		phantomdrive_clear_unlock_pending();
@@ -97,6 +94,9 @@ bool phantomdrive_is_locked(void) {
 void phantomdrive_unlock(void)
 {
 	USB20_Device_Init(DISABLE);
+	// We now delete the file with the password, the password has also
+	// been zero'd out by phantomdrive_snoop_write()
+	// but we should cleanup the file as well
 	if (!unlock_file_delete()) {
 		PFIC_EnableIRQ(USBHS_IRQn);
 		USB20_Device_Init(ENABLE);
